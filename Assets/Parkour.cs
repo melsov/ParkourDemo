@@ -17,7 +17,11 @@ public class Parkour : MonoBehaviour {
     private Vector3 move;
     private Vector3 jump;
     public float jumpForce = 30f;
-    private bool jumping;
+    private int jumpingFrames;
+    private bool jumping {
+        get { return jumpingFrames > 0; }
+        set { jumpingFrames = 0; }
+    }
 
     private RaycastHit hit;
     private RaycastHit sideHit;
@@ -44,7 +48,10 @@ public class Parkour : MonoBehaviour {
     private Vector3 normalizedGravity;
     private float gravityMagnitude;
 
-    private bool debugTransition;
+    private bool wallRunTransition;
+    public Transform debugJumpTarget;
+
+    private Quaternion previousRotation;
 
     public void Awake() {
         rb = GetComponent<Rigidbody>();
@@ -55,12 +62,11 @@ public class Parkour : MonoBehaviour {
         colliderHeight = capColl.bounds.extents.y * 2f;
         normalizedGravity = Physics.gravity.normalized;
         gravityMagnitude = Physics.gravity.magnitude;
+        previousRotation = rb.transform.rotation;
     }
 
-    
-
     public void Update() {
-
+        
         move = Vector3.zero;
         if(Input.GetKey(KeyCode.W)) {
             move += transform.forward;
@@ -73,30 +79,39 @@ public class Parkour : MonoBehaviour {
         }
 
         jump = Vector3.zero;
-        if(!jumping && Input.GetKey(KeyCode.Space)) {
-            jumping = true;
-            jump = rb.transform.up * jumpForce;
+        if(jumpingFrames <= 0 && Input.GetKeyDown(KeyCode.Space)) {
+            jump = rb.transform.up * jumpForce * rb.mass;
         }
 	}
 
     private Vector3 scaledMove {
-        get { return move * (moveSpeed + Mathf.Min(moveSpeed, rb.velocity.sqrMagnitude/10f * momentumMultiplier)); }
+        get { return move * rb.mass * (moveSpeed + Mathf.Min(moveSpeed, rb.velocity.sqrMagnitude/10f * momentumMultiplier)); }
+    }
+
+    private Vector3 moveProjectedOnGroundPreserveMagnitude(Vector3 groundNormal, Vector3 _move) {
+        Vector3 unitProjection = Vector3.Cross(groundNormal, Vector3.Cross(_move.normalized, groundNormal));
+        return unitProjection * _move.magnitude;
     }
 
     public void FixedUpdate() {
+
         float mouseX = Input.mousePosition.x - Screen.width * .5f;
         Quaternion nextRo = wallRunRo * Quaternion.Slerp(rb.rotation, Quaternion.Euler(0f, mouseX * mouseRotateSensitivity, 0f), .5f);
         rb.MoveRotation(nextRo);
-        if(!vaulting) {
-            rb.AddForce(scaledMove);
-            if (checkGrounded(out groundCheckHit)) {
-                if (jumping) {
-                    jumping = false;
+        if (!vaulting) {
+            if (checkGrounded(out groundCheckHit, Vector3.Lerp(rb.transform.up * -1f, Vector3.up * -1f, .5f), rb.position, capColl.bounds.extents.y * 4f)) {
+                if (!wallRunTransition) {
+                    rb.AddForce(moveProjectedOnGroundPreserveMagnitude(groundCheckHit.normal, scaledMove));
+                    //rb.AddForce(scaledMove);
+                }
+                if (jump.sqrMagnitude > 0f) {
+                    jumpingFrames = 10;
                     rb.AddForce(jump);
-                } else {
-                    //stickToInclines(groundCheckHit);
+                } else if(!wallRunTransition || wallRunning) {
+                    stickToInclines(groundCheckHit);
                 }
             }
+            if(jumpingFrames > 0) { jumpingFrames--; }
             wallRun();
         }
         vault();
@@ -145,7 +160,7 @@ public class Parkour : MonoBehaviour {
 
 
     private bool checkGrounded(out RaycastHit hit, Vector3 towardsFeet, Vector3 origin) {
-        return checkGrounded(out hit, towardsFeet, origin, capColl.bounds.extents.y * 1.5f);
+        return checkGrounded(out hit, towardsFeet, origin, colliderHeight * 2.5f);
     }
 
     private bool checkGrounded( out RaycastHit hit, Vector3 towardsFeet) {
@@ -181,6 +196,17 @@ public class Parkour : MonoBehaviour {
     }
 
     private void stickToInclines(RaycastHit groundHit) {
+        wallRunRo = Quaternion.FromToRotation(rb.transform.up, groundHit.normal);
+        wallRunRo = Quaternion.Slerp(wallRunRo, previousRotation, .7f);
+        previousRotation = wallRunRo;
+
+        if(Vector3.Dot(groundHit.normal, Vector3.up) > .8f) {
+            return;
+        }
+        rb.AddForce(getStayOnWallForce(groundHit));
+        rb.AddForce(wallRunHit.normal * -1f * rb.mass * 4f);
+        return;
+
         Vector3 perpendicularUp = Vector3.Cross(groundHit.normal, move);
         if(Vector3.Dot(perpendicularUp, Physics.gravity) > 0f) {
             perpendicularUp *= -1;
@@ -233,27 +259,22 @@ public class Parkour : MonoBehaviour {
             wallRunning = true;
             jumping = false;
             Vector3 start = rb.position;
-            Vector3 end = sideHit.point + sideHit.normal * colliderHeight * .5f;
+            Vector3 end = sideHit.point + sideHit.normal * colliderHeight * .8f;
             Vector3 dif = end - start;
             Vector3 dir = dif.normalized;
 
             Vector3 wallForwards = getAlongWallDirection(sideHit);
             Quaternion targetRo = Quaternion.LookRotation(wallForwards, sideHit.normal);
             //transition into wall run
-            float transitionFrames = 60;
-            Time.timeScale = .5f;
-            debugTransition = true;
+            float transitionFrames = 9;
+            wallRunTransition = true;
             for(int i=0; i < transitionFrames; ++i) {
                 Vector3 targetUp = Vector3.Slerp(rb.transform.up, sideHit.normal, (i + 1)/transitionFrames);
                 rb.AddTorque(getTorqueTowardsWall(targetUp), ForceMode.Force);
-                //TODO: debug force To reach?
-                Vector3 forceToRe = forceToReach(rb, rb.position, Vector3.Lerp(rb.position, end, (i + 1) / transitionFrames));
-                rb.AddForce(forceToRe);
+                rb.MovePosition(Vector3.Lerp(start, end, (i + 1) / transitionFrames));
                 yield return new WaitForFixedUpdate();
             }
-            debugTransition = false;
-
-            Time.timeScale = 1f;
+            wallRunTransition = false;
 
             rb.MovePosition(end);
             rb.MoveRotation(targetRo);
@@ -281,7 +302,7 @@ public class Parkour : MonoBehaviour {
 
                 if(wallRunKeyWasReleased && Input.GetKey(wallRunKey)) {
                     //pop off wall
-                    rb.AddForce(rb.transform.up * .5f * moveSpeed);
+                    rb.AddForce(rb.transform.up * .5f * moveSpeed * rb.mass);
                     break;
                 }
                 
@@ -378,15 +399,15 @@ public class Parkour : MonoBehaviour {
         }
     }
 
-    public static Vector3 forceToReach(Rigidbody rb, Vector3 start, Vector3 end) {
+    public static Vector3 forceTowards(Rigidbody rb, Vector3 start, Vector3 end) {
         Vector3 dif = end - start;
-        dif.z = Vector3.Dot(dif, rb.transform.forward);
-        float y0 = Mathf.Sqrt(dif.y * -2 * Physics.gravity.y * rb.mass);
-        float z0 = (-Physics.gravity.y * rb.mass / y0) * dif.z;
-        if(float.IsNaN(y0) || float.IsNaN(z0)) {
-            return Vector3.zero;
-        }
-        return new Vector3(0, y0, z0);
+        Vector3 result = dif;
+        float dragFudge = Mathf.Pow(rb.drag, 5f);
+        result.y = Mathf.Sqrt(Mathf.Abs(dif.y) * -2f * Physics.gravity.y * rb.mass) * Mathf.Sign(dif.y);
+        result.x = (-Physics.gravity.y * rb.mass / result.y) * dif.x;
+        result.z = (-Physics.gravity.y * rb.mass / result.y) * dif.z;
+        result *= dragFudge;
+        return result;
     }
     
 
@@ -404,7 +425,7 @@ public class Parkour : MonoBehaviour {
     }
 
     private void debugShowStateWithColor() {
-        if (debugTransition) {
+        if (wallRunTransition) {
             rendrr.material.color = Color.blue;
         } else if (wallRunning) {
             rendrr.material.color = Color.green;
