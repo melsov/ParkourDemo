@@ -102,7 +102,6 @@ public class Parkour : MonoBehaviour {
             if (checkGrounded(out groundCheckHit, Vector3.Lerp(rb.transform.up * -1f, Vector3.up * -1f, .5f), rb.position, capColl.bounds.extents.y * 4f)) {
                 if (!wallRunTransition) {
                     rb.AddForce(moveProjectedOnGroundPreserveMagnitude(groundCheckHit.normal, scaledMove));
-                    //rb.AddForce(scaledMove);
                 }
                 if (jump.sqrMagnitude > 0f) {
                     jumpingFrames = 10;

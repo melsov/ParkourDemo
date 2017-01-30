@@ -1,4 +1,4 @@
 sceneSetups:
-- path: Assets/Playground.unity
+- path: Assets/WheelofColors.unity
   isLoaded: 1
   isActive: 1
